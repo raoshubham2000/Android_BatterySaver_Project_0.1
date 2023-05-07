@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Battery Saver</string>
+    <string name="battery_percentage">Battery Percentage: %1$d%%</string>
+    <string name="save_battery">Save Battery</string>
+</resources>
