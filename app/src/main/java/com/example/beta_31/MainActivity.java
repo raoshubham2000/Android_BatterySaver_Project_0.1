@@ -17,58 +17,84 @@ import android.net.Uri;
 import android.os.BatteryManager;
 import android.os.Bundle;
 import android.provider.Settings;
+import android.util.Log;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 
 public class MainActivity extends AppCompatActivity {
+
+    private static final int REQUEST_DATA_PERMISSIONS = 1;
+    private ConnectivityManager.NetworkCallback dataCallback;
+    private static final int REQUEST_BLUETOOTH_PERMISSIONS = 3;
+
+
+    private TextView batteryPercentageTextView;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        TextView batteryPercentageTextView = findViewById(R.id.batteryPercentageTextView);
+        batteryPercentageTextView = findViewById(R.id.batteryPercentageTextView);
         Button saveBatteryButton = findViewById(R.id.saveBatteryButton);
 
-        // Set the click listener for the Save Battery button
-        saveBatteryButton.setOnClickListener(v -> {
-            // Reduce brightness
-
-            // Turn off data, Bluetooth, and GPS
-            disableData();
-            disableBluetooth();
-            disableGPS();
-            reduceBrightness();
-
-
-        });
-
-        // Get the current battery percentage and update the UI
+        saveBatteryButton.setOnClickListener(v -> saveBattery());
+        BluetoothAdapter bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
         int batteryPercentage = getBatteryPercentage();
-        batteryPercentageTextView.setText(getString(R.string.battery_percentage, batteryPercentage));
+
+        updateBatteryPercentage(batteryPercentage);
     }
-    private static final int REQUEST_SYSTEM_ALERT_WINDOW_PERMISSION = 2;
+
+    private void saveBattery() {
+        disableData();
+        disableBluetooth();
+        disableGPS();
+        reduceBrightness();
+
+    }
+
     private void reduceBrightness() {
         // Reduce the screen brightness
         // Note: Requires the SYSTEM_ALERT_WINDOW permission in AndroidManifest.xml
         if (!Settings.canDrawOverlays(this)) {
             // Request the necessary permission
             Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName()));
-            startActivityForResult(intent, REQUEST_SYSTEM_ALERT_WINDOW_PERMISSION);
+            requestManageOverlayPermission.launch(intent);
         } else {
-            WindowManager.LayoutParams layoutParams = getWindow().getAttributes();
-            layoutParams.screenBrightness = 0.5f; // Adjust the value as needed (0.0f - 1.0f)
-            getWindow().setAttributes(layoutParams);
+            try {
+                WindowManager.LayoutParams layoutParams = getWindow().getAttributes();
+                layoutParams.screenBrightness = 0.5f; // Adjust the value as needed (0.0f - 1.0f)
+                getWindow().setAttributes(layoutParams);
+
+                Toast.makeText(this, "Screen brightness reduced", Toast.LENGTH_SHORT).show();
+            } catch (Exception e) {
+                e.printStackTrace();
+                Toast.makeText(this, "Failed to reduce brightness", Toast.LENGTH_SHORT).show();
+                Log.e("MainActivity", "Error reducing brightness: " + e.getMessage());
+            }
         }
     }
 
-    private static final int REQUEST_DATA_PERMISSIONS = 1;
+    private final ActivityResultLauncher<Intent> requestManageOverlayPermission = registerForActivityResult(
+            new ActivityResultContracts.StartActivityForResult(),
+            result -> {
+                if (result.getResultCode() == RESULT_OK) {
+                    // Overlay permission granted, retry reducing brightness
+                    reduceBrightness();
+                } else {
+                    Toast.makeText(this, "Permission denied. Cannot reduce brightness.", Toast.LENGTH_SHORT).show();
+                }
+            }
+    );
 
 
 
@@ -79,12 +105,33 @@ public class MainActivity extends AppCompatActivity {
                 && ActivityCompat.checkSelfPermission(this, Manifest.permission.CHANGE_NETWORK_STATE) == PackageManager.PERMISSION_GRANTED) {
             ConnectivityManager connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
             if (connectivityManager != null) {
+                if (dataCallback != null) {
+                    connectivityManager.unregisterNetworkCallback(dataCallback);
+                }
+
+                dataCallback = new ConnectivityManager.NetworkCallback() {
+                    @Override
+                    public void onAvailable(Network network) {
+                        ConnectivityManager connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+                        if (connectivityManager != null) {
+                            connectivityManager.bindProcessToNetwork(network);
+                        }
+                    }
+
+                    @Override
+                    public void onLost(Network network) {
+                        ConnectivityManager connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
+                        if (connectivityManager != null) {
+                            connectivityManager.bindProcessToNetwork(null);
+                        }
+                    }
+                };
+
                 NetworkRequest.Builder builder = new NetworkRequest.Builder();
                 builder.addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET);
                 builder.addTransportType(NetworkCapabilities.TRANSPORT_CELLULAR);
                 NetworkRequest request = builder.build();
-                connectivityManager.unregisterNetworkCallback(dataCallback);
-                connectivityManager.requestNetwork(request, dataCallback);
+                connectivityManager.registerNetworkCallback(request, dataCallback);
             }
         } else {
             // Request the necessary permissions
@@ -92,47 +139,20 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private final ConnectivityManager.NetworkCallback dataCallback = new ConnectivityManager.NetworkCallback() {
-        @Override
-        public void onAvailable(Network network) {
-            ConnectivityManager connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
-            if (connectivityManager != null) {
-                connectivityManager.bindProcessToNetwork(network);
-            }
-        }
-
-        @Override
-        public void onLost(Network network) {
-            ConnectivityManager connectivityManager = (ConnectivityManager) getSystemService(Context.CONNECTIVITY_SERVICE);
-            if (connectivityManager != null) {
-                connectivityManager.bindProcessToNetwork(null);
-            }
-        }
-    };
-
-    // Handle permission request results
-
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
-        if (requestCode == REQUEST_DATA_PERMISSIONS) {
-            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED
-                    && grantResults[1] == PackageManager.PERMISSION_GRANTED) {
-                // Permission granted, disable data
-                disableData();
-            } else {
-                Toast.makeText(this, "Permission denied. Cannot disable mobile data.", Toast.LENGTH_SHORT).show();            }
-        }
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-    }
-
-
     private void disableBluetooth() {
+        // Check if Bluetooth is supported on the device
+        BluetoothAdapter bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
+        if (bluetoothAdapter == null) {
+            // Device does not support Bluetooth
+            Toast.makeText(this, "Bluetooth is not supported on this device", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
         // Disable Bluetooth
         // Note: Requires the BLUETOOTH and BLUETOOTH_ADMIN permissions in AndroidManifest.xml
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH) == PackageManager.PERMISSION_GRANTED
                 && ActivityCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_ADMIN) == PackageManager.PERMISSION_GRANTED) {
-            BluetoothAdapter bluetoothAdapter = BluetoothAdapter.getDefaultAdapter();
-            if (bluetoothAdapter != null && bluetoothAdapter.isEnabled()) {
+            if (bluetoothAdapter.isEnabled()) {
                 bluetoothAdapter.disable();
             }
         } else {
@@ -142,9 +162,7 @@ public class MainActivity extends AppCompatActivity {
     }
 
     private void disableGPS() {
-        // Disable GPS
-        // Note: Requires the ACCESS_FINE_LOCATION permission in AndroidManifest.xml
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
             LocationManager locationManager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
             if (locationManager != null) {
                 LocationListener locationListener = new LocationListener() {
@@ -171,20 +189,46 @@ public class MainActivity extends AppCompatActivity {
                 locationManager.removeUpdates(locationListener);
             }
         } else {
-            // Request the necessary permissions
             ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, 0);
         }
     }
 
-
     private int getBatteryPercentage() {
+
         IntentFilter intentFilter = new IntentFilter(Intent.ACTION_BATTERY_CHANGED);
         Intent batteryStatus = registerReceiver(null, intentFilter);
 
-        int level = batteryStatus.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
-        int scale = batteryStatus.getIntExtra(BatteryManager.EXTRA_SCALE, -1);
+        int level = batteryStatus != null ? batteryStatus.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) : -1;
+        int scale = batteryStatus != null ? batteryStatus.getIntExtra(BatteryManager.EXTRA_SCALE, -1) : -1;
 
         float batteryPercentage = (level / (float) scale) * 100;
         return Math.round(batteryPercentage);
     }
+
+    private void updateBatteryPercentage(int percentage) {
+        batteryPercentageTextView.setText(getString(R.string.battery_percentage, percentage));
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+
+        if (requestCode == REQUEST_DATA_PERMISSIONS) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED
+                    && grantResults[1] == PackageManager.PERMISSION_GRANTED) {
+                disableData();
+            } else {
+                Toast.makeText(this, "Permission denied. Cannot disable mobile data.", Toast.LENGTH_SHORT).show();
+            }
+        } else if (requestCode == REQUEST_BLUETOOTH_PERMISSIONS) {
+            if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED
+                    && grantResults[1] == PackageManager.PERMISSION_GRANTED) {
+                disableBluetooth();
+            } else {
+                Toast.makeText(this, "Permission denied. Cannot disable Bluetooth.", Toast.LENGTH_SHORT).show();
+            }
+        }
+    }
 }
+
+
